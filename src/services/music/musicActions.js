@@ -82,26 +82,38 @@ function isDuplicateTrack(player, track) {
 }
 
 export async function joinVoiceChannel(client, interaction) {
-    assertRiffyAvailable(client);
+    const guild = interaction.guild;
 
-    // Ask Discord for the user's CURRENT voice state instead of relying
-    // only on the cached interaction.member.voice value.
-    let voiceState;
-
-    try {
-        voiceState = await interaction.guild.voiceStates.fetch(
-            interaction.user.id,
-            { force: true }
-        );
-    } catch {
-        voiceState = interaction.guild.voiceStates.cache.get(
-            interaction.user.id
+    if (!guild) {
+        throw new TitanBotError(
+            'Guild unavailable',
+            ErrorTypes.USER_INPUT,
+            'This command can only be used inside a server.',
         );
     }
 
-    const channel = voiceState?.channel;
+    /*
+     * Get the user's CURRENT voice state.
+     *
+     * First use the gateway cache. If it is missing/stale,
+     * ask Discord directly for the voice state.
+     */
+    let voiceState = guild.voiceStates.cache.get(interaction.user.id);
 
-    if (!channel) {
+    if (!voiceState?.channelId) {
+        try {
+            voiceState = await guild.voiceStates.fetch(
+                interaction.user.id,
+                { force: true }
+            );
+        } catch {
+            // We'll handle the missing voice state below.
+        }
+    }
+
+    const channelId = voiceState?.channelId;
+
+    if (!channelId) {
         throw new TitanBotError(
             'Not in voice channel',
             ErrorTypes.USER_INPUT,
@@ -109,44 +121,84 @@ export async function joinVoiceChannel(client, interaction) {
         );
     }
 
-    const guildId = interaction.guild.id;
-    const guildData = getGuildMusicData(guildId);
+    /*
+     * Resolve the actual Discord voice channel.
+     */
+    let channel = guild.channels.cache.get(channelId);
 
-    let player = getPlayer(client, guildId);
-
-    // If a player exists in a different VC, destroy it first.
-    if (player && player.voiceChannel !== channel.id) {
+    if (!channel) {
         try {
-            player.destroy();
+            channel = await guild.channels.fetch(channelId);
         } catch {
-            // Player may already be gone.
+            channel = null;
+        }
+    }
+
+    if (!channel || !channel.isVoiceBased()) {
+        throw new TitanBotError(
+            'Voice channel unavailable',
+            ErrorTypes.USER_INPUT,
+            'I could not find the voice channel you are connected to.',
+        );
+    }
+
+    /*
+     * Check whether Discord believes the bot can join.
+     */
+    if (!channel.joinable) {
+        throw new TitanBotError(
+            'Voice channel not joinable',
+            ErrorTypes.PERMISSION,
+            'I cannot join that voice channel. Check my Connect/View Channel permissions.',
+        );
+    }
+
+    /*
+     * Join through Discord's gateway directly.
+     *
+     * We intentionally do NOT use Riffy/Lavalink here.
+     *
+     * self_deaf must be false because Discord Soundboard
+     * cannot be used while the bot is deafened.
+     */
+    guild.shard.send({
+        op: 4,
+        d: {
+            guild_id: guild.id,
+            channel_id: channel.id,
+            self_mute: false,
+            self_deaf: false,
+        },
+    });
+
+    /*
+     * Wait for Discord to confirm that the bot's voice state
+     * moved into the requested channel.
+     */
+    let joined = false;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+        if (guild.members.me?.voice?.channelId === channel.id) {
+            joined = true;
+            break;
         }
 
-        player = null;
+        await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    // Create the Riffy voice connection.
-    if (!player) {
-        player = client.riffy.createConnection({
-            guildId,
-            voiceChannel: channel.id,
-            textChannel: interaction.channel.id,
-
-            // Restore the normal Riffy setting for now.
-            deaf: true,
-        });
-
-        guildData.playerChannelId = interaction.channel.id;
+    if (!joined) {
+        throw new TitanBotError(
+            'Voice connection timed out',
+            ErrorTypes.DISCORD_API,
+            'Discord did not finish connecting me to the voice channel. Check my voice channel permissions.',
+        );
     }
-
-    player.setVolume(guildData.volume);
 
     return successEmbed(
         'Joined Voice Channel',
-        `Connected to **${channel.name}**. Use /play to start music, or /music for playback controls.`,
+        `Connected to **${channel.name}**.`,
     );
 }
-
 export async function playQuery(client, interaction, query) {
     if (YOUTUBE_URL_PATTERN.test(query)) {
         throw new TitanBotError(
