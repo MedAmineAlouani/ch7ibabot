@@ -84,13 +84,21 @@ function isDuplicateTrack(player, track) {
 export async function joinVoiceChannel(client, interaction) {
     assertRiffyAvailable(client);
 
-    // Get the current member from the guild cache
-    const member =
-        interaction.guild.members.cache.get(interaction.user.id)
-        ?? await interaction.guild.members.fetch(interaction.user.id);
+    // Ask Discord for the user's CURRENT voice state instead of relying
+    // only on the cached interaction.member.voice value.
+    let voiceState;
 
-    // Get the user's current voice state directly
-    const voiceState = interaction.guild.voiceStates.cache.get(interaction.user.id);
+    try {
+        voiceState = await interaction.guild.voiceStates.fetch(
+            interaction.user.id,
+            { force: true }
+        );
+    } catch {
+        voiceState = interaction.guild.voiceStates.cache.get(
+            interaction.user.id
+        );
+    }
+
     const channel = voiceState?.channel;
 
     if (!channel) {
@@ -103,24 +111,31 @@ export async function joinVoiceChannel(client, interaction) {
 
     const guildId = interaction.guild.id;
     const guildData = getGuildMusicData(guildId);
+
     let player = getPlayer(client, guildId);
 
+    // If a player exists in a different VC, destroy it first.
     if (player && player.voiceChannel !== channel.id) {
         try {
             player.destroy();
         } catch {
-            // player may already be gone
+            // Player may already be gone.
         }
+
         player = null;
     }
 
+    // Create the Riffy voice connection.
     if (!player) {
         player = client.riffy.createConnection({
             guildId,
             voiceChannel: channel.id,
             textChannel: interaction.channel.id,
-            deaf: false,
+
+            // Restore the normal Riffy setting for now.
+            deaf: true,
         });
+
         guildData.playerChannelId = interaction.channel.id;
     }
 
