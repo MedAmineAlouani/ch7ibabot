@@ -22,7 +22,7 @@ export default {
 
     data: new SlashCommandBuilder()
         .setName('soundboard')
-        .setDescription('Play one of this server\'s Soundboard sounds')
+        .setDescription('Play one of this server Soundboard sounds')
         .addStringOption((option) =>
             option
                 .setName('sound')
