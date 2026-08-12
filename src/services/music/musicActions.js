@@ -83,11 +83,26 @@ function isDuplicateTrack(player, track) {
 
 export async function joinVoiceChannel(client, interaction) {
     assertRiffyAvailable(client);
-    assertInVoice(interaction.member);
+
+    // Get the current member from the guild cache
+    const member =
+        interaction.guild.members.cache.get(interaction.user.id)
+        ?? await interaction.guild.members.fetch(interaction.user.id);
+
+    // Get the user's current voice state directly
+    const voiceState = interaction.guild.voiceStates.cache.get(interaction.user.id);
+    const channel = voiceState?.channel;
+
+    if (!channel) {
+        throw new TitanBotError(
+            'Not in voice channel',
+            ErrorTypes.USER_INPUT,
+            'You need to be in a voice channel.',
+        );
+    }
 
     const guildId = interaction.guild.id;
     const guildData = getGuildMusicData(guildId);
-    const channel = interaction.member.voice.channel;
     let player = getPlayer(client, guildId);
 
     if (player && player.voiceChannel !== channel.id) {
